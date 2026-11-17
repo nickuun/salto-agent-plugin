@@ -1,6 +1,6 @@
 ---
 name: salto
-description: Single entry point for all Salto workflows. Type a natural-language request and the skill routes it internally — deploy (make changes), explore (query/inspect), or migrate (CPQ→RLM rebuild) — and loads adapter-specific knowledge as needed. Use this for any task against a Salto NACL workspace.
+description: Single entry point for all Salto workflows. Type a natural-language request and the skill routes it internally — deploy (make changes), promote (copy an already-deployed deployment to another environment), explore (query/inspect), or migrate (CPQ→RLM rebuild) — and loads adapter-specific knowledge as needed. Use this for any task against a Salto NACL workspace.
 ---
 
 # Salto
@@ -54,6 +54,10 @@ CPQ and RLM are **flavors of the `salesforce` adapter**, distinguished by the wo
 
 Keywords that signal MIGRATE: `migrate CPQ`, `CPQ to RLM`, `CPQ to RCA`, `CPQ to Revenue Cloud`, `rebuild CPQ`, `move from CPQ`, `convert CPQ`, or "migrate/rebuild" together with both CPQ and RLM/RCA/Revenue-Cloud tokens.
 
+**PROMOTE** — the user wants to promote / move / copy a deployment that was already deployed to one environment into another environment (e.g. sandbox → production). Check this **before** DEPLOY — it names an existing deployment, not a change to make, so it must never be re-done as NACL edits.
+
+Keywords that signal PROMOTE: `promote`, `promotion`, or `move` / `copy` / `push` / `deploy` together with an existing deployment (its id, its name, "my last deployment", "the sandbox deployment") and a target environment (`to production`, `to prod`, `to <env name>`).
+
 **DEPLOY** — the user wants to create, change, rename, delete, or fix a configuration element, or resume an existing deployment.
 
 Keywords that signal DEPLOY: `add`, `create`, `rename`, `delete`, `remove`, `change`, `update`, `set`, `enable`, `disable`, `fix`, `deploy`.
@@ -74,6 +78,8 @@ Keywords that signal EXPLORE: `what`, `show`, `list`, `which`, `how many`, `expl
 | "what would change if I deployed now?"                     | EXPLORE   |
 | "fix the changeError on trigger ai_review_test"            | DEPLOY    |
 | "list my deployments"                                      | EXPLORE   |
+| "promote deployment abc123 to production"                  | PROMOTE   |
+| "copy the label-cleanup deployment from sandbox to prod"   | PROMOTE   |
 | "show me the ai_review_test trigger definition"            | EXPLORE   |
 | "delete the old Zendesk macro close_ticket_legacy"         | DEPLOY    |
 | "migrate our CPQ config to RLM"                            | MIGRATE   |
@@ -89,6 +95,12 @@ Keywords that signal EXPLORE: `what`, `show`, `list`, `which`, `how many`, `expl
 1. Print: `Routing to cpq-to-rlm-migration workflow...`
 2. Read `{{SKILL_ROOT}}/adapters/salesforce/cpq-to-rlm-migration.md` into context.
 3. Execute the instructions with the full original `$ARGUMENTS` unchanged. That workflow loads both `adapters/salesforce/cpq.md` and `adapters/salesforce/rlm.md`, reads the CPQ source read-only, **stops to ask the user about lossy/ambiguous areas it can't decide from the data (a Clarification Gate — mandatory even in auto mode; never fabricate selling models/terms/prices/rule behavior)**, and stops again at a human gate before any real deploy.
+
+**If PROMOTE:**
+
+1. Print: `Routing to salto-deploy workflow (promote mode)...`
+2. Read `{{SKILL_ROOT}}/references/salto-deploy.md` into context.
+3. Follow its **Promote mode** section with the full original `$ARGUMENTS` unchanged. It creates the new deployment with `salto-cli deployment create from-deployments`; never re-apply the change by editing NACLs.
 
 **If DEPLOY:**
 
@@ -119,6 +131,7 @@ Ask exactly: "Do you want to (1) make a change and deploy it, or (2) explore/que
 /salto "what Zendesk triggers exist in my prod environment?"
 /salto "show me what would change if I deployed now" --deployment-id abc123
 /salto "rename the Okta group admins to platform-admins"
+/salto "promote deployment abc123 to production"
 /salto "migrate our CPQ config to RLM" --source ~/develop/workspaces/cpq --target ~/develop/workspaces/sf1
 ```
 
