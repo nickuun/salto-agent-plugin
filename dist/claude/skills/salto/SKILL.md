@@ -12,7 +12,7 @@ description: Single entry point for all Salto workflows. Type a natural-language
 The single Salto entry point. This skill is a thin router. Based on your request it loads the right internal workflow (`references/salto-deploy.md` or `references/salto-explore.md`) plus any adapter-specific knowledge (`adapters/<adapter>/`) bundled with this skill, then executes those instructions with your original `$ARGUMENTS`.
 
 > [!IMPORTANT]
-> **Never use the Salesforce CLI (`sf` / `sfdx`).** This applies to every route below (DEPLOY, EXPLORE, MIGRATE).
+> **Never use the Salesforce CLI (`sf` / `sfdx`).** This applies to every route below (DEPLOY, PROMOTE, EXPLORE, MIGRATE).
 >
 > - Never run `sf` or `sfdx`, not even read-only commands: no `sf data query`, `sf sobject describe`, `sf org ...`, `sf apex ...`, `sf project deploy/retrieve`, `sfdx force:...`. This holds even when the user says their `sf` CLI is logged in.
 > - Don't call the org directly in any other way either. Use the commands and MCP tools the loaded workflow names (for example `salto-cli`, `salto`, `git` / `gh` / `az`) and NACL edits.
@@ -54,9 +54,11 @@ CPQ and RLM are **flavors of the `salesforce` adapter**, distinguished by the wo
 
 Keywords that signal MIGRATE: `migrate CPQ`, `CPQ to RLM`, `CPQ to RCA`, `CPQ to Revenue Cloud`, `rebuild CPQ`, `move from CPQ`, `convert CPQ`, or "migrate/rebuild" together with both CPQ and RLM/RCA/Revenue-Cloud tokens.
 
-**PROMOTE** — the user wants to promote / move / copy a deployment that was already deployed to one environment into another environment (e.g. sandbox → production). Check this **before** DEPLOY — it names an existing deployment, not a change to make, so it must never be re-done as NACL edits.
+**PROMOTE** — the user wants to take a deployment that is already **deployed** in one environment and apply the same change to a **different** environment (e.g. sandbox → production), and asks for no new edit. Check this **before** DEPLOY — it names an existing deployment, not a change to make, so it must never be re-done as NACL edits.
 
-Keywords that signal PROMOTE: `promote`, `promotion`, or `move` / `copy` / `push` / `deploy` together with an existing deployment (its id, its name, "my last deployment", "the sandbox deployment") and a target environment (`to production`, `to prod`, `to <env name>`).
+Signals: `promote`, or `move` / `copy` / `push` / `deploy`, together with an existing deployment (its id, its name, "my last deployment") and a different target environment (`to production`, `to prod`, `to <env name>`). Count `promote` / `promotion` only when they refer to a deployment or an environment, not to a record (e.g. a NetSuite promotion code).
+
+Not PROMOTE → DEPLOY: the request asks for an edit (even "push this fix to the sandbox deployment"), or it continues a deployment in its own environment (e.g. "deploy deployment abc123" while abc123 is still in Preview). If you can't tell whether the deployment is already deployed or where it was deployed, route to PROMOTE: Promote mode checks its status first and hands the request to DEPLOY when it is not a promote.
 
 **DEPLOY** — the user wants to create, change, rename, delete, or fix a configuration element, or resume an existing deployment.
 
@@ -80,6 +82,9 @@ Keywords that signal EXPLORE: `what`, `show`, `list`, `which`, `how many`, `expl
 | "list my deployments"                                      | EXPLORE   |
 | "promote deployment abc123 to production"                  | PROMOTE   |
 | "copy the label-cleanup deployment from sandbox to prod"   | PROMOTE   |
+| "push this fix to the sandbox deployment"                  | DEPLOY    |
+| "deploy deployment abc123" (abc123 is still in Preview)    | DEPLOY    |
+| "create a promotion code SUMMER20 in NetSuite"             | DEPLOY    |
 | "show me the ai_review_test trigger definition"            | EXPLORE   |
 | "delete the old Zendesk macro close_ticket_legacy"         | DEPLOY    |
 | "migrate our CPQ config to RLM"                            | MIGRATE   |
@@ -115,10 +120,11 @@ Keywords that signal EXPLORE: `what`, `show`, `list`, `which`, `how many`, `expl
 3. Execute the instructions with the full original `$ARGUMENTS` unchanged.
 
 **If AMBIGUOUS:**
-Ask exactly: "Do you want to (1) make a change and deploy it, or (2) explore/query the current state without making changes?"
+Ask exactly: "Do you want to (1) make a change and deploy it, (2) promote a deployment that is already deployed to another environment, or (3) explore/query the current state without making changes?"
 
 - Answer deploy / change / 1 → DEPLOY path.
-- Answer explore / query / read / 2 → EXPLORE path.
+- Answer promote / 2 → PROMOTE path.
+- Answer explore / query / read / 3 → EXPLORE path.
 
 (A CPQ→RLM migration request is rarely ambiguous; route it to MIGRATE when both CPQ and RLM/RCA are named.)
 

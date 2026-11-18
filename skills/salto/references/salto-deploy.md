@@ -1,10 +1,12 @@
 # Salto Deploy (reference, loaded by the `/salto` router)
 
-This is reference content. It is not registered as a slash command. The `/salto` router reads it when intent is classified as DEPLOY, then follows the instructions below with the user's original `$ARGUMENTS`.
+This is reference content. It is not registered as a slash command. The `/salto` router reads it when intent is classified as DEPLOY or PROMOTE, then follows the instructions below with the user's original `$ARGUMENTS`.
 
 > [!NOTE]
 >
 > Invoked via: /salto "<deploy request>" [--workspace <path>] [--deployment-id <id> | --branch-name <name>] [--max-local-iterations <n>] [--max-saas-iterations <n>] [--ticket <id-or-url>]
+>
+> Promote: /salto "promote <deployment> to <env>" [--workspace <path>] [--deployment-id <source id> | --branch-name <source branch>]. In Promote mode `--deployment-id` / `--branch-name` name the **source** deployment; in the other modes they name the deployment to edit.
 
 Orchestrate NACL changes from edit to SaaS-validated PR. Handles both new and existing Salto deployments, and promotes an already-deployed deployment to another environment.
 
@@ -18,7 +20,7 @@ All deterministic orchestration (pre-flight checks, env resolution, worktree/sta
 
 In both of these modes, state is downloaded directly from the target environment — no "seed deployment" is needed.
 
-**Promote** — the user asks to promote / move / copy a deployment that is already deployed (e.g. in sandbox) to another environment (e.g. production). No worktree, no NACL edits, no PR: the skill creates a Promote deployment from the source deployment via `salto-cli deployment create from-deployments`, then previews it. The target gets exactly the changes that were deployed and tested in the source env, and Salto links the two deployments. See **Promote mode** (after Step 12).
+**Promote** — the user asks to promote / move / copy a deployment that is already deployed (e.g. in sandbox) to a different environment (e.g. production), with no new edit. No worktree, no NACL edits, no PR: the skill creates a Promote deployment from the source deployment via `salto-cli deployment create from-deployments`, then previews it. The target gets exactly the changes that were deployed and tested in the source env, and Salto links the two deployments. See **Promote mode** (after Step 12).
 
 ## Guardrails
 
@@ -26,7 +28,7 @@ In both of these modes, state is downloaded directly from the target environment
 - Never push until the local plan is clean (zero relevant `changeErrors`). If `validate-local` fails for any reason, stop — do not push.
 - Never force-push to any branch outside `salto/*`.
 - Stop immediately on auth or credential errors. Report clearly and do not attempt to debug credentials.
-- A request to promote / move / copy an existing deployment to another env always uses Promote mode (`deployment create from-deployments`). Never re-apply its changes by editing NACLs on the target branch: that deploys an untested re-creation. If the source deployment can't be found, ask the user; if the promote fails, stop and report.
+- A request to promote / move / copy an already-deployed deployment to another env always uses Promote mode (`deployment create from-deployments`). Never re-apply its changes by editing NACLs on the target branch: that deploys an untested re-creation. If the source deployment can't be found, ask the user; if the promote fails, stop and report.
 - Never run `sf` or `sfdx` (the Salesforce CLI), not even read-only commands like `sf org list`. Changes reach the org only through this workflow (`salto-cli` + PR + Salto deployment, or a Promote deployment; the Step 9 fallback is part of it). If the workflow can't run (preflight still fails after Step 3's env question, no linked env, no git repo), stop and report why. Do not deploy outside Salto (`sf project deploy`, a direct API call), even if the user asks.
 - Bounded loops: max 5 local iterations, max 3 SaaS iterations. If either limit is hit, stop and summarise what remains unresolved.
 
@@ -95,7 +97,7 @@ Follow these steps in order. Stop and report clearly if any step fails.
 
 **Execution discipline** (this workflow is latency-sensitive): batch independent commands into a single tool call where possible, and keep interim commentary to one short line per numbered step — every extra message between tool calls costs a full model round trip. When learning the shape of an element type, read **one** existing record of that type plus anything it references (e.g. its subsidiary) and the type definition if needed — do not read every sibling record.
 
-**Promote requests**: if the request is to promote / move / copy an existing deployment to another environment, skip Steps 1–12 and follow **Promote mode** (after Step 12) instead.
+**Promote requests**: if the request is to promote / move / copy an already-deployed deployment to another environment, skip Steps 1–12 and follow **Promote mode** (after Step 12) instead. Promote mode hands a request back to Steps 1–12 when it turns out not to be a promote (P2).
 
 ### Step 1: Resolve workspace
 
@@ -384,7 +386,24 @@ Cleanup: delete `STATE_DIR` (use your file tools or `rm -rf` / `Remove-Item -Rec
 
 Promote a deployment that is already deployed (the **source**, e.g. in sandbox) to another environment (the **target**, e.g. production). Salto builds the new deployment from what the source deployment actually deployed. No worktree, no NACL edits, no commit, push or PR: don't run `prepare-worktree`, `validate-local`, `ship` or `create from-pull-request` here.
 
-**P1. Find the source deployment** (`SOURCE_ID`):
+**P1. Workspace and environments.** Resolve `WORKSPACE` as in Step 1, then run:
+
+```
+salto-cli deployment preflight --workspace "<WORKSPACE>"
+```
+
+Promote mode uses no git, so ignore `failures` about git, branches, the repo or "multiple environments". From the JSON use:
+
+- `warnings` → print them (for an outdated-CLI warning, see Step 3).
+- `auth.ok: false` → stop (auth error, see Guardrails).
+- `workspace.envs` → `WS_ENVS`, this workspace's envs (`name` + `id`; `id` is null in legacy workspaces).
+
+Env ids: for an env in `WS_ENVS` with an `id`, use that id. For any other env name, run `salto-cli deployment env-info -e "<name>"` once and use its `envId`; if the name is not found or matches several envs, ask the user for the env id. Use only ids after this.
+
+- **Target env** (`TARGET_ENV_UUID`): the env the user wants the change in. If none is named, ask.
+- **Source env** (`SOURCE_ENV_UUID`, needed only to look up the source deployment in P2): the env the user named; otherwise the `WS_ENVS` envs minus the target, if exactly one is left; otherwise ask.
+
+**P2. Find the source deployment** (`SOURCE_ID`):
 
 - `--deployment-id <id>`, `--branch-name <branch>` or a deployment id in the request → that is the source.
 - Otherwise list the latest deployed deployments of the source env (newest first) and match the user's words (name, "my last one", ...) against `name` and `createdAt`:
@@ -393,20 +412,25 @@ Promote a deployment that is already deployed (the **source**, e.g. in sandbox) 
   salto-cli deployment list --env-id "<SOURCE_ENV_UUID>" --status DONE --limit 20 --no-pr-status
   ```
 
-  Each row has `id`, `name`, `status`, `targetEnvId`, `targetEnvName`, `createdAt`. (`-n "<name>"` matches only the exact full name.) Get `SOURCE_ENV_UUID` with `salto-cli deployment env-info -e "<source env name>"` (`envId`). If the user named no source env, use the workspace's env (the `uuid` in `salto.config/envsSaltoCloud.nacl`) when there is only one; otherwise ask.
+  Each row has `id`, `name`, `status`, `targetEnvId`, `targetEnvName`, `createdAt`. (`-n "<name>"` matches only the exact full name.)
 - One clear match → use it. Several candidates or none → show them (id, name, date) and ask the user which one. Never guess, and never fall back to re-doing the change by hand.
 
-Then read the source: `salto-cli deployment show --deployment-id "<SOURCE_ID>"` (or `--branch-name "<branch>"`). The JSON has `id`, `name`, `status` and `url`; the `url` holds its org and env: `.../orgs/<SOURCE_ORG_ID>/envs/<source env id>/deployments/<id>`. The status must be `Done` (deployed). If it isn't, stop and tell the user there is nothing deployed to promote yet.
+Then read the source (the list has no `result`): `salto-cli deployment show --deployment-id "<SOURCE_ID>"` (or `--branch-name "<branch>"`). The JSON has `id`, `name`, `status`, `result` and `url`. The source deployment's env is the `targetEnvId` of its list row; when it didn't come from the list, it is the `/envs/<id>/` part of the `url` (`show` has no env field).
 
-**P2. Resolve the target env:**
+- `status` `Done` and `result` `SUCCESS` → promote it.
+- `status` `Done` with another `result` (e.g. `PARTIAL_FAILURE`) → tell the user only part of it was deployed, and ask before you promote it.
+- `status` not `Done` (not deployed yet): if its env is the target env, this is not a promote; the user wants to continue that deployment. Follow Steps 1–12 in existing-deployment mode with `--deployment-id <SOURCE_ID>`. Otherwise stop and tell the user there is nothing deployed to promote yet.
+
+**P3. Check the envs** (both calls in one tool call):
 
 ```
-salto-cli deployment env-info -e "<target env name>"
+salto-cli deployment env-info -E "<TARGET_ENV_UUID>"
+salto-cli deployment env-info -E "<source deployment's env id>"
 ```
 
-Store `TARGET_ENV_UUID` = `envId` and `TARGET_ENV_NAME` = `envName`. Its `orgId` must be `SOURCE_ORG_ID`. If the name is not found, matches several envs, or is in another org, ask the user for the target env id (then use `env-info -E <id>`). If the target is the source env, stop: there is nothing to promote.
+Store `TARGET_ENV_NAME` = the target's `envName`. Both must have the same `orgId`; if not, stop and tell the user. If the target is the source deployment's env, stop: there is nothing to promote.
 
-**P3. Create the Promote deployment:**
+**P4. Create the Promote deployment:**
 
 ```
 salto-cli deployment create from-deployments --deployment-ids "<SOURCE_ID>" --target-env-id "<TARGET_ENV_UUID>" --deployment-name "<name>"
@@ -415,26 +439,28 @@ salto-cli deployment create from-deployments --deployment-ids "<SOURCE_ID>" --ta
 - `<name>`: the name the user gave; otherwise `Promote '<source name>' to <TARGET_ENV_NAME>`.
 - Several source deployments: pass all their ids after `--deployment-ids`. They must all be deployed to the same env.
 - `--include-all-fixes`: also include the source's Done fix deployments (later deployments to the same env from the same source). Use it when the user asks to include fixes.
-- `--update-if-exists`: if a deployment with this name already exists in the target env, add the source deployment(s) to it instead of creating a new one. Use it only when the user asks to add to an existing promotion.
-- The command waits until the SaaS preview is ready (this can take a few minutes) and prints JSON like `{ "id": "<uuid>", "name": "...", "status": "Preview", "type": "Promote", "url": "https://app.salto.io/..." }`. Store `DEPLOYMENT_ID` = `id`.
-- Non-zero exit → print the error verbatim and stop. Don't retry another way.
+- `--update-if-exists`: add the source deployment(s) to an existing promotion in the target env instead of creating a new one. Use it only when the user asks for that, and pass that promotion's exact name (from `salto-cli deployment list --env-id "<TARGET_ENV_UUID>" --no-pr-status`). With any other name the CLI silently creates a new deployment.
+- The command waits until the SaaS preview is ready (this can take a few minutes) and prints JSON like `{ "id": "<uuid>", "name": "...", "status": "Preview", "type": "Promote", "url": "https://app.salto.io/..." }`. Store `DEPLOYMENT_ID` = `id` and its `url`.
+- Exit 3 with no JSON (`Deployment failed to reach preview state. Status: <status>`): the Promote deployment **was created**, but its preview did not finish cleanly (e.g. the target was changed by hand and now conflicts). Find it with `salto-cli deployment list --env-id "<TARGET_ENV_UUID>" -n "<name>" --no-pr-status` (newest row), then get its `url` with `salto-cli deployment show --deployment-id "<id>"`. Report its id, url and status (`ConflictsResolution` → resolve the conflicts in the Salto UI; `Failed` → see why in the Salto UI) and stop. Skip P5.
+- Any other non-zero exit → print the error verbatim and stop.
+- Never run `create` again for the same promotion: it makes a second deployment with the same name.
 
-**P4. Preview:**
+**P5. Preview:**
 
 ```
 salto-cli deployment preview --deployment-id "<DEPLOYMENT_ID>" -o summary --allow-warnings
 ```
 
-Same summary shape as `preview` above. The fix loops (Steps 6 and 11) don't apply: the promoted changes are what was tested in the source env, so don't edit them. Report relevant changeErrors and let the user decide (fix in the source env and promote again, or resolve them in the Salto UI).
+Same summary shape as `preview` above. Exit 3 with valid JSON is a normal result, not a failure: the plan has Error changeErrors, or it is empty. An empty plan (0 adds / modifies / removes) means the target already has these changes: tell the user there is nothing to deploy. The fix loops (Steps 6 and 11) don't apply: the promoted changes are what was tested in the source env, so don't edit them. Report relevant changeErrors and let the user decide (fix in the source env and promote again, or resolve them in the Salto UI). Always go on to P6.
 
-**P5. Finish.** Print:
+**P6. Finish.** Print:
 
 - **Deployment**: `<DEPLOYMENT_ID>` (type Promote) + its `url`
 - **Promoted**: `<source name>` (`<SOURCE_ID>`) → `<TARGET_ENV_NAME>`
-- **Changes**: adds / modifies / removes from the preview summary
-- **Change-validator status**: one dot for the SaaS preview, per the Step 12 convention.
+- **Changes**: adds / modifies / removes from the preview summary (or "none: the target already has these changes")
+- **Change-validator status**: one dot for the SaaS preview, with the Step 12 colors. Here 🔴 just means the preview has Error changeErrors; there is no fix loop.
 
-Then tell the user to review and deploy it in the Salto UI. Don't deploy it yourself.
+Then tell the user to review and deploy it in the Salto UI. Don't deploy it yourself. After it is applied, a local workspace that tracks the target env needs the same two `git pull`s as in Step 12.
 
 ## Usage examples
 
