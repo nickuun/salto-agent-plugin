@@ -412,7 +412,7 @@ Env ids: for an env in `WS_ENVS` with an `id`, use that id. For any other env na
   salto-cli deployment list --env-id "<SOURCE_ENV_UUID>" --status DONE --limit 20 --no-pr-status
   ```
 
-  Each row has `id`, `name`, `status`, `targetEnvId`, `targetEnvName`, `createdAt`. (`-n "<name>"` matches only the exact full name.)
+  Each row has `id`, `name`, `status`, `targetEnvId`, `targetEnvName`, `createdAt`. (`-n "<name>"` matches only the exact full name. Always pass `--env-id`: without it, `list` covers every org you can access.)
 - One clear match → use it. Several candidates or none → show them (id, name, date) and ask the user which one. Never guess, and never fall back to re-doing the change by hand.
 
 Then read the source (the list has no `result`): `salto-cli deployment show --deployment-id "<SOURCE_ID>"` (or `--branch-name "<branch>"`). The JSON has `id`, `name`, `status`, `result` and `url`. The source deployment's env is the `targetEnvId` of its list row; when it didn't come from the list, it is the `/envs/<id>/` part of the `url` (`show` has no env field).
