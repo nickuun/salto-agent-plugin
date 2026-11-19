@@ -60,6 +60,8 @@ Signals: `promote`, or `move` / `copy` / `push` / `deploy`, together with an exi
 
 Not PROMOTE → DEPLOY: the request asks for an edit (even "push this fix to the sandbox deployment"), or it continues a deployment in its own environment (e.g. "deploy deployment abc123" while abc123 is still in Preview). If you can't tell whether the deployment is already deployed or where it was deployed, route to PROMOTE: Promote mode checks its status first and hands the request to DEPLOY when it is not a promote.
 
+Not PROMOTE → EXPLORE: a question about what a promote would do (e.g. "what would change if I promoted abc123 to prod?"). Answering a question must never create a deployment.
+
 **DEPLOY** — the user wants to create, change, rename, delete, or fix a configuration element, or resume an existing deployment.
 
 Keywords that signal DEPLOY: `add`, `create`, `rename`, `delete`, `remove`, `change`, `update`, `set`, `enable`, `disable`, `fix`, `deploy`.
@@ -85,6 +87,7 @@ Keywords that signal EXPLORE: `what`, `show`, `list`, `which`, `how many`, `expl
 | "push this fix to the sandbox deployment"                  | DEPLOY    |
 | "deploy deployment abc123" (abc123 is still in Preview)    | DEPLOY    |
 | "create a promotion code SUMMER20 in NetSuite"             | DEPLOY    |
+| "what would change if I promoted abc123 to prod?"          | EXPLORE   |
 | "show me the ai_review_test trigger definition"            | EXPLORE   |
 | "delete the old Zendesk macro close_ticket_legacy"         | DEPLOY    |
 | "migrate our CPQ config to RLM"                            | MIGRATE   |
