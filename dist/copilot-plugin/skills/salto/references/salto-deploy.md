@@ -414,6 +414,7 @@ Env ids: for an env in `WS_ENVS` with an `id`, use that id. For any other env na
      ```
 
   2. No match there, or the source env is unknown → the target env, any status: `salto-cli deployment list --env-id "<TARGET_ENV_UUID>" --limit 20 --no-pr-status`. A match here that is not `Done` is a deployment the user wants to finish in its own env (see the hand-off below).
+  3. Still no match and the source env is unknown → ask the user which env to promote from (offer the `WS_ENVS` envs other than the target). Don't search those envs and pick one yourself: which env the change was tested in matters.
 
   Each row has `id`, `name`, `status`, `sourceEnvId`, `targetEnvId`, `targetEnvName`, `createdBy`, `createdAt`. (`-n "<name>"` matches only the exact full name. Always pass `--env-id`: without it, `list` covers every org you can access.)
 - One clear match → use it. If you matched it only by recency ("my last one"), confirm it with the user first (name, `createdBy`, `createdAt`): the list can hold teammates' deployments. Several candidates or none → show them (id, name, `createdBy`, date) and ask the user which one (and which source env, if it is unknown). Never guess, and never fall back to re-doing the change by hand.
