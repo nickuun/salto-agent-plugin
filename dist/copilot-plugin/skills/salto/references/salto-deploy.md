@@ -97,7 +97,7 @@ Follow these steps in order. Stop and report clearly if any step fails.
 
 **Execution discipline** (this workflow is latency-sensitive): batch independent commands into a single tool call where possible, and keep interim commentary to one short line per numbered step — every extra message between tool calls costs a full model round trip. When learning the shape of an element type, read **one** existing record of that type plus anything it references (e.g. its subsidiary) and the type definition if needed — do not read every sibling record.
 
-**Promote requests**: if the request is to promote / move / copy an already-deployed deployment to another environment, skip Steps 1–12 and follow **Promote mode** (after Step 12) instead. Promote mode hands a request back to Steps 1–12 when it turns out not to be a promote (P2).
+**Promote requests**: if the request is to promote / move / copy an already-deployed deployment to another environment, skip Steps 1–12 and follow **Promote mode** (after Step 12) instead. If the deployment is not deployed yet, P2 only previews it (Steps 1–12 only when an edit is also asked).
 
 ### Step 1: Resolve workspace
 
@@ -449,7 +449,7 @@ Create it only when the user asked to promote. If they only asked what a promote
 - `<name>`: the name the user gave; otherwise `Promote <source name> to <TARGET_ENV_NAME>`. Drop `$`, backticks, quotes and backslashes from it, so shell quoting keeps it intact and the `-n` lookup below matches (tell the user if you changed a name they gave).
 - Several source deployments: pass all their ids after `--deployment-ids`. They must all be deployed to the same env.
 - `--include-all-fixes`: also include the source's fix deployments (see **Fixes** in P2 for when it works).
-- `--update-if-exists`: add the source deployment(s) to an existing promotion in the target env instead of creating a new one. Use it only when the user asks for that. Pass the exact name of an existing promotion in the target env with status `Preview`, `OutdatedPreview` or `ConflictsResolution` (find it with `salto-cli deployment list --env-id "<TARGET_ENV_UUID>" --no-pr-status`). For any other name or status the CLI silently creates a new deployment.
+- `--update-if-exists`: add the source deployment(s) to an existing promotion in the target env instead of creating a new one. Use it only when the user asks for that. The CLI updates the deployment in the target env with that exact name whose status is not `Done`, `Failed` or `Selection`; make sure exactly one has that name (check with `salto-cli deployment list --env-id "<TARGET_ENV_UUID>" -n "<name>" --no-pr-status`). If none does, the CLI silently creates a new deployment.
 - The command waits until the SaaS preview is ready (this can take a few minutes) and prints JSON like `{ "id": "<uuid>", "name": "...", "status": "Preview", "type": "Promote", "url": "https://app.salto.io/..." }`. Store `DEPLOYMENT_ID` = `id` and its `url`.
 - **Any non-zero exit**: the CLI prints no id, but the deployment may exist anyway (e.g. its preview has conflicts). So just before `create`, note the UTC time (`date -u +%Y-%m-%dT%H:%M:%SZ`; PowerShell: `(Get-Date).ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")`). After a failure, look for it, with that time minus one minute:
 
@@ -460,7 +460,7 @@ Create it only when the user asked to promote. If they only asked what a promote
   - One row → this run created it. Get its `url` with `salto-cli deployment show --deployment-id "<id>"`. Status `Preview` → store `DEPLOYMENT_ID` and go on to P5. Any other status → report its id, url and status and stop (`ConflictsResolution`: resolve the conflicts in the Salto UI; any other status: see the Salto UI).
   - Several rows → show them and ask the user.
   - No row → it was not created: print the CLI error verbatim and stop.
-  - With `--update-if-exists`, look up that promotion by name without `--since` and report it as updated (id, url, status), not as "not created".
+  - With `--update-if-exists`: only if the error is `Deployment failed to reach preview state. Status: <status>`, look up that promotion by name without `--since` and report it as updated (id, url, status). For any other error, print it word for word and say it was not updated (check it in the Salto UI).
 - Never run `create` again for the same promotion: a second run makes a duplicate deployment.
 
 **P5. Preview:**

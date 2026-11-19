@@ -58,7 +58,7 @@ Keywords that signal MIGRATE: `migrate CPQ`, `CPQ to RLM`, `CPQ to RCA`, `CPQ to
 
 Signals: `promote`, or `move` / `copy` / `push` / `deploy`, together with an existing deployment (its id, its name, "my last deployment") and a different target environment (`to production`, `to prod`, `to <env name>`). Count `promote` / `promotion` only when they refer to a deployment or an environment, not to a record (e.g. a NetSuite promotion code).
 
-Not PROMOTE → DEPLOY: the request asks for an edit (even "push this fix to the sandbox deployment"), or it names no target environment (e.g. "deploy deployment abc123"). When a target env is named but you can't tell whether the deployment is already deployed, route to PROMOTE: Promote mode checks the status first, and a deployment that is not deployed yet is only previewed, never promoted.
+Not PROMOTE → DEPLOY: the request asks for an edit (even "push this fix to the sandbox deployment"), or it names no target environment and doesn't say promote (e.g. "deploy deployment abc123"). When a target env is named but you can't tell whether the deployment is already deployed, route to PROMOTE: Promote mode checks the status first, and a deployment that is not deployed yet is only previewed, never promoted.
 
 Not PROMOTE → EXPLORE: a question about what a promote would do (e.g. "what would change if I promoted abc123 to prod?"). Answering a question must never create a deployment.
 
