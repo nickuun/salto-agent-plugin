@@ -392,7 +392,7 @@ Promote a deployment that is already deployed (the **source**, e.g. in sandbox) 
 salto-cli deployment preflight --workspace "<WORKSPACE>"
 ```
 
-Promote mode uses no git, so ignore `failures` about git (no git repo, branch mismatch, remote or repo mismatch) and about "multiple environments". From the JSON use:
+Promote mode needs only these fields from it; ignore its `ok` and `failures` (they are about git and picking an env):
 
 - `warnings` → print them (for an outdated-CLI warning, see Step 3).
 - `auth.ok` not `true` (`false`, or `null` when no token is set) → stop (auth error, see Guardrails).
@@ -424,9 +424,10 @@ Then read the source (the list has no `result`): `salto-cli deployment show --de
 - `status` `Done` and `result` `SUCCESS` → promote it.
 - `result` `PARTIAL_FAILURE` → only part of it was deployed: tell the user and ask before you promote it.
 - `result` `FAILURE`, or `status` `Failed` → nothing was deployed: stop and tell the user.
-- `status` not `Done` (not deployed yet): if its env is the target env, this is not a promote; the user wants to continue that deployment. Follow Steps 1–12 in existing-deployment mode with `--deployment-id <SOURCE_ID>`, and run Step 3's preflight with `-E "<TARGET_ENV_UUID>"`. Otherwise stop and tell the user there is nothing deployed to promote yet.
+- `status` not `Done` (not deployed yet) and its env is the target env → not a promote: the user wants that deployment deployed. Run `salto-cli deployment preview --deployment-id "<SOURCE_ID>" -o summary --allow-warnings`, report it as in P6, and tell the user to deploy it in the Salto UI. (Only if the request also asks for an edit, follow Steps 1–12 in existing-deployment mode with `--deployment-id <SOURCE_ID>`.)
+- `status` not `Done` and another env → stop: there is nothing deployed to promote yet.
 
-**Fixes.** If the user also wants the source's fixes (later deployments of the same change to the source env): `--include-all-fixes` (P4) finds them only when the source deployment came from an environment or another deployment (its list row has a `sourceEnvId`). For a source created from a PR (`sourceEnvId: null`, e.g. every `/salto` deployment) it adds nothing. Then find the fixes yourself in the source env's Done list, show them to the user, and after the user confirms, pass all the ids to `--deployment-ids` in P4. Never tell the user fixes are included when they are not.
+**Fixes.** If the user also wants the source's fixes (later deployments of the same change to the source env): `--include-all-fixes` finds them only when the source deployment came from an environment or another deployment. For a source created from a PR (every `/salto` deployment; `show`'s `description` says so) it adds nothing. Then find the fixes yourself in the source env's Done list, show them to the user, and after the user confirms, pass all the ids to `--deployment-ids` in P4. Never tell the user fixes are included when they are not.
 
 **P3. Check the envs** (both calls in one tool call):
 
@@ -447,18 +448,19 @@ Create it only when the user asked to promote. If they only asked what a promote
 
 - `<name>`: the name the user gave; otherwise `Promote <source name> to <TARGET_ENV_NAME>`. Drop `$`, backticks, quotes and backslashes from it, so shell quoting keeps it intact and the `-n` lookup below matches (tell the user if you changed a name they gave).
 - Several source deployments: pass all their ids after `--deployment-ids`. They must all be deployed to the same env.
-- `--include-all-fixes`: also include the source's Done fix deployments. It works only for a source that came from an environment or another deployment; for a PR-created source it silently adds nothing (see **Fixes** in P2).
-- `--update-if-exists`: add the source deployment(s) to an existing promotion in the target env instead of creating a new one. Use it only when the user asks for that. Pass the exact name of a promotion that is not deployed yet (status not `Done`; find it with `salto-cli deployment list --env-id "<TARGET_ENV_UUID>" --no-pr-status`). With any other name the CLI silently creates a new deployment.
+- `--include-all-fixes`: also include the source's fix deployments (see **Fixes** in P2 for when it works).
+- `--update-if-exists`: add the source deployment(s) to an existing promotion in the target env instead of creating a new one. Use it only when the user asks for that. Pass the exact name of an existing promotion in the target env with status `Preview`, `OutdatedPreview` or `ConflictsResolution` (find it with `salto-cli deployment list --env-id "<TARGET_ENV_UUID>" --no-pr-status`). For any other name or status the CLI silently creates a new deployment.
 - The command waits until the SaaS preview is ready (this can take a few minutes) and prints JSON like `{ "id": "<uuid>", "name": "...", "status": "Preview", "type": "Promote", "url": "https://app.salto.io/..." }`. Store `DEPLOYMENT_ID` = `id` and its `url`.
-- **Any non-zero exit**: the CLI prints no id. A server or network error, a rejected create and the CLI's 2-hour wait limit all exit 3 too, and some of them come after the deployment was created (e.g. a preview with conflicts: `Deployment failed to reach preview state. Status: <status>`). So check whether this run created it:
+- **Any non-zero exit**: the CLI prints no id, but the deployment may exist anyway (e.g. its preview has conflicts). So just before `create`, note the UTC time (`date -u +%Y-%m-%dT%H:%M:%SZ`; PowerShell: `(Get-Date).ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")`). After a failure, look for it, with that time minus one minute:
 
   ```
-  salto-cli deployment list --env-id "<TARGET_ENV_UUID>" -n "<name>" --since 3h --no-pr-status
+  salto-cli deployment list --env-id "<TARGET_ENV_UUID>" -n "<name>" --since "<UTC time>" --no-pr-status
   ```
 
-  (`--since 3h` skips older promotions with the same name.)
-  - A row → this run created it. Get its `url` with `salto-cli deployment show --deployment-id "<id>"`. Status `Preview` → store `DEPLOYMENT_ID` and go on to P5. Any other status → report its id, url and status and stop (`ConflictsResolution`: resolve the conflicts in the Salto UI; any other status: open it in the Salto UI to see what it needs).
+  - One row → this run created it. Get its `url` with `salto-cli deployment show --deployment-id "<id>"`. Status `Preview` → store `DEPLOYMENT_ID` and go on to P5. Any other status → report its id, url and status and stop (`ConflictsResolution`: resolve the conflicts in the Salto UI; any other status: see the Salto UI).
+  - Several rows → show them and ask the user.
   - No row → it was not created: print the CLI error verbatim and stop.
+  - With `--update-if-exists`, look up that promotion by name without `--since` and report it as updated (id, url, status), not as "not created".
 - Never run `create` again for the same promotion: a second run makes a duplicate deployment.
 
 **P5. Preview:**
@@ -476,7 +478,7 @@ Same summary shape as `preview` above. Exit 3 with valid JSON is a normal result
 - **Changes**: adds / modifies / removes from the preview summary (or "none: the target already has these changes")
 - **Change-validator status**: one dot for the SaaS preview, with the Step 12 colors. Here 🔴 just means the preview has Error changeErrors; there is no fix loop.
 
-Then tell the user to review and deploy it in the Salto UI. Don't deploy it yourself. After it is applied, a local workspace that tracks the target env needs the same two `git pull`s as in Step 12.
+Then tell the user to review and deploy it in the Salto UI. Don't deploy it yourself. After it is applied, a local checkout of the target env's tracked branch (`env-info` → `gitDetails.remoteBranchName`) needs two `git pull`s: one right away and one after Salto's post-deployment fetch (as in Step 12).
 
 ## Usage examples
 
